@@ -1,0 +1,5 @@
+/ylint
+/bin/
+*.exe
+*.test
+*.out
