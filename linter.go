@@ -60,6 +60,7 @@ func Lint(r io.Reader, opts Options, emit func(Finding)) error {
 		checkTrailingWhitespace(line, lineNo, emit)
 		checkLineLength(line, lineNo, opts.MaxLineLength, emit)
 		checkDuplicateKey(line, lineNo, &stack, emit)
+		checkFlowCollections(line, lineNo, emit)
 
 		if err == io.EOF {
 			return nil
@@ -120,7 +121,12 @@ func checkLineLength(line string, lineNo, max int, emit func(Finding)) {
 
 func checkDuplicateKey(line string, lineNo int, stack *[]keyLevel, emit func(Finding)) {
 	trimmed := strings.TrimLeft(line, " ")
-	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "-") {
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "-") ||
+		strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		// A line opening with a flow collection is a value, not a block
+		// key, even though it may contain its own "word:" text that would
+		// otherwise look like one. checkFlowCollections handles duplicate
+		// keys inside it instead.
 		return
 	}
 	m := keyLineRe.FindStringSubmatch(line)
@@ -146,4 +152,86 @@ func checkDuplicateKey(line string, lineNo int, stack *[]keyLevel, emit func(Fin
 		return
 	}
 	top.seen[key] = lineNo
+}
+
+// flowFrame tracks one level of flow-collection nesting on a line. Only
+// mapping frames carry a seen set; sequence frames just keep depth correct
+// so a "," inside a nested [...] isn't mistaken for a mapping separator.
+type flowFrame struct {
+	isMap bool
+	seen  map[string]int
+}
+
+var flowKeyRe = regexp.MustCompile(`^\s*('[^']*'|"[^"]*"|[^,:{}\[\]\s]+)\s*:`)
+
+// checkFlowCollections finds duplicate keys inside flow-style mappings
+// ({a: 1, b: 2}), including ones nested inside flow sequences or other
+// mappings. It works on a single line at a time; a flow collection that
+// wraps onto a following line isn't understood yet, so scanning simply
+// stops at end of line.
+func checkFlowCollections(line string, lineNo int, emit func(Finding)) {
+	var stack []flowFrame
+
+	tryKey := func(pos int) {
+		if len(stack) == 0 || !stack[len(stack)-1].isMap {
+			return
+		}
+		m := flowKeyRe.FindStringSubmatch(line[pos:])
+		if m == nil {
+			return
+		}
+		key := strings.Trim(m[1], `'"`)
+		top := &stack[len(stack)-1]
+		if _, ok := top.seen[key]; ok {
+			emit(Finding{Line: lineNo, Rule: "duplicate-key", Message: fmt.Sprintf("key %q already defined earlier on this line", key)})
+			return
+		}
+		top.seen[key] = pos
+	}
+
+	inSingle, inDouble := false, false
+	for i := 0; i < len(line); {
+		c := line[i]
+		switch {
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+			i++
+		case inDouble:
+			if c == '\\' && i+1 < len(line) {
+				i += 2
+				continue
+			}
+			if c == '"' {
+				inDouble = false
+			}
+			i++
+		case c == '\'':
+			inSingle = true
+			i++
+		case c == '"':
+			inDouble = true
+			i++
+		case c == '#':
+			return
+		case c == '{':
+			stack = append(stack, flowFrame{isMap: true, seen: map[string]int{}})
+			i++
+			tryKey(i)
+		case c == '[':
+			stack = append(stack, flowFrame{})
+			i++
+		case c == '}' || c == ']':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+			i++
+		case c == ',':
+			i++
+			tryKey(i)
+		default:
+			i++
+		}
+	}
 }

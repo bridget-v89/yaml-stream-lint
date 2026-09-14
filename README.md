@@ -23,7 +23,8 @@ or tailing a multi-gigabyte generated file.
 - `no-tabs` -- tab characters used for indentation
 - `trailing-whitespace` -- trailing spaces or tabs at end of line
 - `line-length` -- line longer than the configured maximum (120 by default)
-- `duplicate-key` -- the same key defined twice in one mapping
+- `duplicate-key` -- the same key defined twice in one mapping, including
+  inside a flow-style mapping like `{name: api, name: web}`
 
 ## Build
 
@@ -62,5 +63,8 @@ and `0` if the input is clean.
 ## Status
 
 Early. It reads plain scalars and block mappings well enough to catch
-the checks above; it does not yet understand flow-style YAML (`{a: 1}`),
-anchors, or multi-document streams.
+the checks above, and now recognizes flow-style mappings and sequences
+(`{a: 1}`, `[1, 2]`) so their contents don't get misread as block keys
+and duplicate keys inside a flow mapping are caught too. A flow
+collection that spans more than one line isn't understood yet, and
+there's still no support for anchors or multi-document streams.
